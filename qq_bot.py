@@ -2,6 +2,7 @@
 """QQ 机器人 WebSocket 连接脚本 - GitHub Actions版"""
 
 import asyncio
+import io
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ APP_ID = "1905926627"
 APP_SECRET = "YEubI0iRAuePAwjWK8xmcSJA2ungaUPL"
 # ====================
 
-# ===== 智谱AI 大模型 =====
+# ===== 智谱AI =====
 GLM_API_KEY = "c4e721299b1f49cfadeb4070922b3461.aWOul2brW38uHK4B"
 GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 GLM_MODEL = "glm-4-flash"
@@ -129,19 +130,18 @@ async def skill_weather(city):
                 temp = cur["temp_C"]
                 feels = cur["FeelsLikeC"]
                 humidity = cur["humidity"]
-                return f"🐟 {city}现在{desc}，{temp}°C（体感{feels}°C），湿度{humidity}%。要不要鱼先吃饱饭再出门？"
+                return {"type": "text", "content": f"🐟 {city}现在{desc}，{temp}°C（体感{feels}°C），湿度{humidity}%。要不要鱼先吃饱饭再出门？"}
     except Exception:
-        return "鱼查不到这个地方的天气，你换个城市名试试？"
+        return {"type": "text", "content": "🐟 鱼查不到这个地方的天气，你换个城市名试试？"}
 
 
 # ===== 技能：算数学 =====
 async def skill_calc(expr):
     try:
-        # 安全求值：只允许数字和运算符
         if not re.match(r'^[\d+\-*/().\s]+$', expr):
             return None
         result = eval(expr, {"__builtins__": {}}, {})
-        return f"🐟 算出来了：{expr.strip()} = {result}"
+        return {"type": "text", "content": f"🐟 算出来了：{expr.strip()} = {result}"}
     except Exception:
         return None
 
@@ -154,22 +154,92 @@ async def skill_joke():
             async with session.get(url, timeout=10) as resp:
                 data = await resp.json()
                 if data.get("status") == "success":
-                    return f"🐟 给你讲个笑话：{data['data']['content']}"
+                    return {"type": "text", "content": f"🐟 给你讲个笑话：{data['data']['content']}"}
     except Exception:
         pass
-    return "🐟 鱼想了半天没想出笑话，要不你给鱼讲一个？"
+    return {"type": "text", "content": "🐟 鱼想了半天没想出笑话，要不你给鱼讲一个？"}
 
 
 # ===== 技能：现在几点 =====
 async def skill_time():
     now = datetime.now()
     weekdays = ["一","二","三","四","五","六","日"]
-    return f"🐟 现在是{now.year}年{now.month}月{now.day}日 星期{weekdays[now.weekday()]} {now.strftime('%H:%M:%S')}。别催，鱼还在干饭呢。"
+    return {"type": "text", "content": f"🐟 现在是{now.year}年{now.month}月{now.day}日 星期{weekdays[now.weekday()]} {now.strftime('%H:%M:%S')}。别催，鱼还在干饭呢。"}
+
+
+# ===== 技能：生图（智谱CogView）=====
+async def skill_draw(prompt):
+    try:
+        url = "https://open.bigmodel.cn/api/paas/v4/images/generations"
+        headers = {"Authorization": f"Bearer {GLM_API_KEY}", "Content-Type": "application/json"}
+        payload = {"model": "cogview-3-flash", "prompt": prompt}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers, timeout=60) as resp:
+                data = await resp.json()
+                img_url = data["data"][0]["url"]
+                # 下载图片
+                async with session.get(img_url, timeout=30) as img_resp:
+                    img_bytes = await img_resp.read()
+                return {"type": "image", "content": img_bytes, "caption": f"🐟 画好了：{prompt}"}
+    except Exception as e:
+        log.error("生图失败: %s", e)
+        return {"type": "text", "content": "🐟 鱼画不出来，这题太难了。换个描述试试？"}
+
+
+# ===== 技能：语音（Edge TTS）=====
+async def skill_tts(text):
+    try:
+        import edge_tts
+        communicate = edge_tts.Communicate(text, "zh-CN-XiaoxiaoNeural")
+        mp3_buffer = io.BytesIO()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                mp3_buffer.write(chunk["data"])
+        mp3_buffer.seek(0)
+        return {"type": "voice", "content": mp3_buffer.read(), "caption": f"🐟 {text}"}
+    except Exception as e:
+        log.error("语音失败: %s", e)
+        return {"type": "text", "content": "🐟 鱼嗓子哑了，说不出来。"}
+
+
+# ===== 上传文件到QQ =====
+async def upload_qq_file(user_openid, file_bytes, file_type=1):
+    """file_type: 1=图片, 2=语音"""
+    await ensure_token()
+    url = f"{BASE_URL}/v2/users/{user_openid}/files"
+    headers = {"Authorization": f"QQBot {access_token}"}
+    data = aiohttp.FormData()
+    data.add_field("file_type", str(file_type))
+    data.add_field("file", file_bytes, filename="file.png" if file_type == 1 else "file.mp3",
+                   content_type="image/png" if file_type == 1 else "audio/mpeg")
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, data=data, headers=headers, timeout=30) as resp:
+            result = await resp.json()
+            log.info("📎 文件上传: %s", result)
+            return result.get("file_info")
+
+
+# ===== 发送媒体消息 =====
+async def send_c2c_media(user_openid, file_bytes, file_type=1, caption=None):
+    """发送图片或语音"""
+    await ensure_token()
+    file_info = await upload_qq_file(user_openid, file_bytes, file_type)
+    if not file_info:
+        return
+    url = f"{BASE_URL}/v2/users/{user_openid}/messages"
+    headers = {"Authorization": f"QQBot {access_token}"}
+    payload = {"msg_type": 7, "msg_media": {"file_info": file_info}}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload, headers=headers) as resp:
+            result = await resp.json()
+            log.info("📤 媒体消息: %s", result)
+    if caption:
+        await send_c2c_message(user_openid, caption)
 
 
 # ===== 指令识别 =====
 async def try_skill(content):
-    """如果命中技能就返回回复，否则返回None"""
+    """如果命中技能就返回结果dict，否则返回None"""
     c = content.strip()
 
     # 天气
@@ -185,7 +255,7 @@ async def try_skill(content):
     if re.match(r'^(?:讲个笑话|笑话|来个笑话|讲笑话)$', c):
         return await skill_joke()
 
-    # 数学计算：纯数字算式
+    # 数学计算
     if re.match(r'^[\d+\-*/().\s]+$', c) and any(op in c for op in '+-*/'):
         return await skill_calc(c)
 
@@ -195,6 +265,16 @@ async def try_skill(content):
         r = await skill_calc(m.group(1))
         if r:
             return r
+
+    # 生图
+    m = re.match(r'^(?:画|画一张|画个|画一下|draw|画个图|画一幅)\s*(.+)$', c, re.I)
+    if m:
+        return await skill_draw(m.group(1).strip())
+
+    # 语音
+    m = re.match(r'^(?:说|读|念|语音|读一下|念一下)\s*(.+)$', c, re.I)
+    if m:
+        return await skill_tts(m.group(1).strip())
 
     return None
 
@@ -282,16 +362,20 @@ async def on_event(t, data):
         msg_id = data["id"]
         log.info("💬 [单聊] 收到: %s", content)
         try:
-            # 先试技能
-            skill_reply = await try_skill(content)
-            if skill_reply:
-                reply = skill_reply
+            skill_result = await try_skill(content)
+            if skill_result:
+                if skill_result["type"] == "image":
+                    await send_c2c_media(user_openid, skill_result["content"], 1, skill_result.get("caption"))
+                elif skill_result["type"] == "voice":
+                    await send_c2c_media(user_openid, skill_result["content"], 2, skill_result.get("caption"))
+                else:
+                    await send_c2c_message(user_openid, skill_result["content"], msg_id)
             else:
                 reply = await chat_with_glm(f"c2c_{user_openid}", content)
+                await send_c2c_message(user_openid, reply, msg_id)
         except Exception as e:
-            log.error("GLM调用失败: %s", e)
-            reply = "我脑子卡了一下，再说一遍？"
-        await send_c2c_message(user_openid, reply, msg_id)
+            log.error("处理失败: %s", e)
+            await send_c2c_message(user_openid, "我脑子卡了一下，再说一遍？", msg_id)
     elif t == "GROUP_AT_MESSAGE_CREATE":
         content = data.get("content", "").strip()
         group_openid = data["group_openid"]
@@ -299,17 +383,29 @@ async def on_event(t, data):
         author = data["author"].get("member_nick", "好友")
         log.info("💬 [群聊] %s: %s", author, content)
         try:
-            skill_reply = await try_skill(content)
-            if skill_reply:
-                reply = skill_reply
+            skill_result = await try_skill(content)
+            if skill_result:
+                if skill_result["type"] == "text":
+                    await send_group_message(group_openid, skill_result["content"], msg_id)
+                else:
+                    await send_group_message(group_openid, "🐟 这个功能群里用不了，私聊鱼吧！", msg_id)
             else:
                 reply = await chat_with_glm(f"group_{group_openid}", f"{author}说：{content}")
+                await send_group_message(group_openid, reply, msg_id)
         except Exception as e:
-            log.error("GLM调用失败: %s", e)
-            reply = "我脑子卡了一下，再说一遍？"
-        await send_group_message(group_openid, reply, msg_id)
+            log.error("处理失败: %s", e)
+            await send_group_message(group_openid, "我脑子卡了一下，再说一遍？", msg_id)
     elif t == "READY":
         log.info("🎉 大肥鱼已上线，等待消息...")
+        # 主动给所有记忆里的用户发消息
+        for key in memory_db:
+            if key.startswith("c2c_"):
+                openid = key[4:]
+                try:
+                    await send_c2c_message(openid, "🐟 大肥鱼上线了！别催别催，鱼刚吃完饭。")
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    log.error("主动消息失败: %s", e)
 
 
 async def ws_loop():
