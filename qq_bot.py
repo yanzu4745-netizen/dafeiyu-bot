@@ -186,19 +186,25 @@ async def skill_draw(prompt):
         return {"type": "text", "content": "🐟 鱼画不出来，这题太难了。换个描述试试？"}
 
 
-# ===== 技能：语音（Edge TTS）=====
+# ===== 技能：语音（Edge TTS → AMR）=====
 async def skill_tts(text):
     try:
         import edge_tts
         communicate = edge_tts.Communicate(text, "zh-CN-XiaoxiaoNeural")
-        mp3_buffer = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                mp3_buffer.write(chunk["data"])
-        mp3_buffer.seek(0)
-        if mp3_buffer.tell() < 100:
-            return {"type": "text", "content": f"🐟 {text}"}
-        return {"type": "voice", "content": mp3_buffer.read(), "caption": f"🐟 {text}"}
+        mp3_path = "/tmp/tts.mp3"
+        await communicate.save(mp3_path)
+        # 用ffmpeg转AMR格式（QQ语音只认AMR）
+        amr_path = "/tmp/tts.amr"
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", mp3_path, "-ar", "8000", "-ac", "1", "-b:a", "12.2k", amr_path,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+        )
+        await proc.wait()
+        if os.path.exists(amr_path) and os.path.getsize(amr_path) > 100:
+            with open(amr_path, "rb") as f:
+                amr_bytes = f.read()
+            return {"type": "voice", "content": amr_bytes, "caption": f"🐟 {text}"}
+        return {"type": "text", "content": f"🐟 {text}"}
     except Exception as e:
         log.error("语音失败: %s", e)
         return {"type": "text", "content": f"🐟 {text}"}
@@ -210,10 +216,13 @@ async def upload_qq_file(user_openid, file_bytes, file_type=1):
     await ensure_token()
     url = f"{BASE_URL}/v2/users/{user_openid}/files"
     headers = {"Authorization": f"QQBot {access_token}"}
+    if file_type == 1:
+        fname, ctype = "img.png", "image/png"
+    else:
+        fname, ctype = "voice.amr", "audio/amr"
     data = aiohttp.FormData()
     data.add_field("file_type", str(file_type))
-    data.add_field("file", file_bytes, filename="file.png" if file_type == 1 else "file.mp3",
-                   content_type="image/png" if file_type == 1 else "audio/mpeg")
+    data.add_field("file", file_bytes, filename=fname, content_type=ctype)
     async with aiohttp.ClientSession() as session:
         async with session.post(url, data=data, headers=headers, timeout=30) as resp:
             result = await resp.json()
