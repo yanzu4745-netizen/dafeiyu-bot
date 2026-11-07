@@ -39,6 +39,7 @@ token_expire_at = 0
 
 chat_histories = {}
 MAX_HISTORY = 10
+processed_msgs = set()
 
 MEMORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.json")
 MAX_MEMORIES = 15
@@ -368,6 +369,11 @@ async def send_group_message(group_openid, content, msg_id=None):
 async def on_event(t, data):
     log.info("📨 事件: %s | %s", t, json.dumps(data, ensure_ascii=False)[:200])
     if t == "C2C_MESSAGE_CREATE":
+        msg_id = data["id"]
+        if msg_id in processed_msgs:
+            log.info("⏭️ 跳过重复消息: %s", msg_id)
+            return
+        processed_msgs.add(msg_id)
         content = data.get("content", "").strip()
         # 语音消息用asr识别文本
         if not content and data.get("attachments"):
@@ -377,7 +383,6 @@ async def on_event(t, data):
                     log.info("🎤 语音识别: %s", content)
                     break
         user_openid = data["author"]["user_openid"]
-        msg_id = data["id"]
         log.info("💬 [单聊] 收到: %s", content)
         if not content:
             await send_c2c_message(user_openid, "🐟 鱼没听清你说啥，再说一遍？", msg_id)
