@@ -19,7 +19,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run bot
-        run: timeout 330 python qq_bot.py
+        run: timeout 330m python qq_bot.py
 
       - name: Save memory
         run: |

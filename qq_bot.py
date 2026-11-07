@@ -358,9 +358,19 @@ async def on_event(t, data):
     log.info("📨 事件: %s | %s", t, json.dumps(data, ensure_ascii=False)[:200])
     if t == "C2C_MESSAGE_CREATE":
         content = data.get("content", "").strip()
+        # 语音消息用asr识别文本
+        if not content and data.get("attachments"):
+            for att in data["attachments"]:
+                if att.get("asr_refer_text"):
+                    content = att["asr_refer_text"].strip()
+                    log.info("🎤 语音识别: %s", content)
+                    break
         user_openid = data["author"]["user_openid"]
         msg_id = data["id"]
         log.info("💬 [单聊] 收到: %s", content)
+        if not content:
+            await send_c2c_message(user_openid, "🐟 鱼没听清你说啥，再说一遍？", msg_id)
+            return
         try:
             skill_result = await try_skill(content)
             if skill_result:
