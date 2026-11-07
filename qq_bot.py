@@ -196,10 +196,12 @@ async def skill_tts(text):
             if chunk["type"] == "audio":
                 mp3_buffer.write(chunk["data"])
         mp3_buffer.seek(0)
+        if mp3_buffer.tell() < 100:
+            return {"type": "text", "content": f"🐟 {text}"}
         return {"type": "voice", "content": mp3_buffer.read(), "caption": f"🐟 {text}"}
     except Exception as e:
         log.error("语音失败: %s", e)
-        return {"type": "text", "content": "🐟 鱼嗓子哑了，说不出来。"}
+        return {"type": "text", "content": f"🐟 {text}"}
 
 
 # ===== 上传文件到QQ =====
