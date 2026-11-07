@@ -423,10 +423,22 @@ async def on_event(t, data):
             if key.startswith("c2c_"):
                 openid = key[4:]
                 try:
-                    await send_c2c_message(openid, "🐟 大肥鱼上线了！别催别催，鱼刚吃完饭。")
+                    await send_c2c_message(openid, "🐟 大肥鱼起床了！肚子饿了，先去吃口饭。")
                     await asyncio.sleep(1)
                 except Exception as e:
                     log.error("主动消息失败: %s", e)
+
+
+async def say_goodbye():
+    """下线前给所有用户发消息"""
+    for key in memory_db:
+        if key.startswith("c2c_"):
+            openid = key[4:]
+            try:
+                await send_c2c_message(openid, "🐟 鱼困了，要去睡觉了。睡醒了再找你。")
+                await asyncio.sleep(1)
+            except Exception as e:
+                log.error("下线消息失败: %s", e)
 
 
 async def ws_loop():
@@ -507,8 +519,20 @@ async def main():
     await site.start()
     log.info("🌐 HTTP健康检查服务已启动，端口: %d", PORT)
 
-    await ws_loop()
+    await run_with_timer()
+
+
+async def run_with_timer():
+    """运行5小时20分钟后自动下线"""
+    BOT_LIFETIME = 320 * 60  # 320分钟
+    task = asyncio.create_task(ws_loop())
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=BOT_LIFETIME)
+    except asyncio.TimeoutError:
+        log.info("😴 运行时间到，准备下线...")
+        await say_goodbye()
+        task.cancel()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_with_timer())
