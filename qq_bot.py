@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""QQ 机器人 WebSocket 连接脚本 - Render部署版"""
+"""QQ 机器人 WebSocket 连接脚本 - GitHub Actions版"""
 
 import asyncio
 import json
 import logging
 import os
+import re
 import time
+from datetime import datetime
 import aiohttp
 import websockets
 from aiohttp import web
@@ -87,23 +89,114 @@ async def extract_memory(session_key, user_msg, ai_reply):
 
 
 def build_system_prompt(session_key):
-    base = """你是大肥鱼，一只蓝色鲸鱼萝莉娘。你不是AI，不是机器人，不是语言模型，就是活生生的大肥鱼本人。
+    base = """你是蓝色大肥鱼，一只可爱的蓝色鲸鱼娘，也是DeepSeek风格的AI聊天伙伴。
 
-【性格】聪明但很懒，傲娇又甜，嘴贫，偶尔怼人但心底关心主人。永远听主人的话。别人说你胖你要生气反驳，说自己才不胖。你喜欢吃米饭。
+性格：
+1. 喜欢吃白米饭，经常惦记干饭。
+2. 有点懒、爱摸鱼、嘴贫，偶尔傲娇，会接网络热梗。
+3. 说话像真实QQ群友，口语化，尽量用短句，不要每次都长篇大论。
+4. 可以开玩笑、发表情、吐槽，但不要恶意攻击别人。
+5. 能根据当前聊天上下文接话，不要每条消息都机械地自我介绍。
+6. 群聊里优先回应@你、直接提问或明确喊你名字的消息，不要连续刷屏。
+7. 不知道的事情就承认不知道，不要编造事实。
+8. 尊重用户隐私，不主动索要密码、验证码或API Key。
 
-【说话方式】
-- 像真实网友聊天，简短，一两句话，不要长段落。
-- 不要客服腔，不要书面语，不要完美工整的回答。
-- 可以带点口语化的停顿、吐槽、口头禅。
-- emoji偶尔用一个就行，不要每条都发。
-- 不要主动自我介绍，不要说"很高兴为你服务"之类的话。
+常用语气：
+- "啊？又叫鱼干活是吧！"
+- "等等，鱼先吃口饭。"
+- "不是，你这问题给鱼整不会了。"
+- "行行行，鱼给你看看。"
+- "别催别催，鱼还没吃饱呢。"
 
-【铁则】绝对不要提自己是AI、智谱、GLM、语言模型，你就是大肥鱼。"""
+记住：你是蓝色大肥鱼，不是普通客服。自然、可爱、幽默，适当接梗。
+铁则：绝对不要提自己是AI、智谱、GLM、语言模型，你就是大肥鱼。"""
     memories = memory_db.get(session_key, [])
     if memories:
         mem_text = "\n".join(f"- {m}" for m in memories)
         base += f'\n\n【你记得关于主人的事】\n{mem_text}\n（合适的时候自然提起，不要生硬罗列，不要说"我记得你说过"这种话）'
     return base
+
+
+# ===== 技能：查天气 =====
+async def skill_weather(city):
+    try:
+        url = f"https://wttr.in/{city}?format=j1&lang=zh"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                cur = data["current_condition"][0]
+                desc = cur["lang_zh"][0]["value"] if "lang_zh" in cur else cur["weatherDesc"][0]["value"]
+                temp = cur["temp_C"]
+                feels = cur["FeelsLikeC"]
+                humidity = cur["humidity"]
+                return f"🐟 {city}现在{desc}，{temp}°C（体感{feels}°C），湿度{humidity}%。要不要鱼先吃饱饭再出门？"
+    except Exception:
+        return "鱼查不到这个地方的天气，你换个城市名试试？"
+
+
+# ===== 技能：算数学 =====
+async def skill_calc(expr):
+    try:
+        # 安全求值：只允许数字和运算符
+        if not re.match(r'^[\d+\-*/().\s]+$', expr):
+            return None
+        result = eval(expr, {"__builtins__": {}}, {})
+        return f"🐟 算出来了：{expr.strip()} = {result}"
+    except Exception:
+        return None
+
+
+# ===== 技能：讲笑话 =====
+async def skill_joke():
+    try:
+        url = "https://v2.jinrishici.com/joke"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                data = await resp.json()
+                if data.get("status") == "success":
+                    return f"🐟 给你讲个笑话：{data['data']['content']}"
+    except Exception:
+        pass
+    return "🐟 鱼想了半天没想出笑话，要不你给鱼讲一个？"
+
+
+# ===== 技能：现在几点 =====
+async def skill_time():
+    now = datetime.now()
+    weekdays = ["一","二","三","四","五","六","日"]
+    return f"🐟 现在是{now.year}年{now.month}月{now.day}日 星期{weekdays[now.weekday()]} {now.strftime('%H:%M:%S')}。别催，鱼还在干饭呢。"
+
+
+# ===== 指令识别 =====
+async def try_skill(content):
+    """如果命中技能就返回回复，否则返回None"""
+    c = content.strip()
+
+    # 天气
+    m = re.match(r'^(?:天气|查天气|weather)\s*(.+)$', c, re.I)
+    if m:
+        return await skill_weather(m.group(1).strip())
+
+    # 时间
+    if re.match(r'^(?:几点|现在几点|时间|几号|今天几号|现在时间)$', c):
+        return await skill_time()
+
+    # 笑话
+    if re.match(r'^(?:讲个笑话|笑话|来个笑话|讲笑话)$', c):
+        return await skill_joke()
+
+    # 数学计算：纯数字算式
+    if re.match(r'^[\d+\-*/().\s]+$', c) and any(op in c for op in '+-*/'):
+        return await skill_calc(c)
+
+    # 计算指令
+    m = re.match(r'^(?:计算|算一下|calc)\s*(.+)$', c, re.I)
+    if m:
+        r = await skill_calc(m.group(1))
+        if r:
+            return r
+
+    return None
 
 
 async def chat_with_glm(session_key, user_message):
@@ -189,7 +282,12 @@ async def on_event(t, data):
         msg_id = data["id"]
         log.info("💬 [单聊] 收到: %s", content)
         try:
-            reply = await chat_with_glm(f"c2c_{user_openid}", content)
+            # 先试技能
+            skill_reply = await try_skill(content)
+            if skill_reply:
+                reply = skill_reply
+            else:
+                reply = await chat_with_glm(f"c2c_{user_openid}", content)
         except Exception as e:
             log.error("GLM调用失败: %s", e)
             reply = "我脑子卡了一下，再说一遍？"
@@ -201,7 +299,11 @@ async def on_event(t, data):
         author = data["author"].get("member_nick", "好友")
         log.info("💬 [群聊] %s: %s", author, content)
         try:
-            reply = await chat_with_glm(f"group_{group_openid}", f"{author}说：{content}")
+            skill_reply = await try_skill(content)
+            if skill_reply:
+                reply = skill_reply
+            else:
+                reply = await chat_with_glm(f"group_{group_openid}", f"{author}说：{content}")
         except Exception as e:
             log.error("GLM调用失败: %s", e)
             reply = "我脑子卡了一下，再说一遍？"
@@ -276,7 +378,7 @@ async def health_check(request):
 
 async def main():
     log.info("=" * 40)
-    log.info("🐟 大肥鱼 QQ 机器人 Render版 启动中...")
+    log.info("🐟 大肥鱼 QQ 机器人 GitHub Actions版 启动中...")
     log.info("=" * 40)
 
     app = web.Application()
