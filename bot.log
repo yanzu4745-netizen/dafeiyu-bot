@@ -1,0 +1,46 @@
+11-07 18:41:13 [INFO] ========================================
+11-07 18:41:13 [INFO] 🐟 大肥鱼 QQ 机器人 Render版 启动中...
+11-07 18:41:13 [INFO] ========================================
+Traceback (most recent call last):
+  File "/home/user/Doubao/chats/98132301461762/render_deploy/qq_bot.py", line 295, in <module>
+    asyncio.run(main())
+  File "/opt/python3.12/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/opt/python3.12/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/python3.12/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/home/user/Doubao/chats/98132301461762/render_deploy/qq_bot.py", line 288, in main
+    await site.start()
+  File "/opt/python3.12/lib/python3.12/site-packages/aiohttp/web_runner.py", line 121, in start
+    self._server = await loop.create_server(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/python3.12/lib/python3.12/asyncio/base_events.py", line 1584, in create_server
+    raise OSError(err.errno, msg) from None
+OSError: [Errno 98] error while attempting to bind on address ('0.0.0.0', 10000): [errno 98] address already in use
+11-07 18:41:21 [INFO] ========================================
+11-07 18:41:21 [INFO] 🐟 大肥鱼 QQ 机器人 Render版 启动中...
+11-07 18:41:21 [INFO] ========================================
+Traceback (most recent call last):
+  File "/home/user/Doubao/chats/98132301461762/render_deploy/qq_bot.py", line 295, in <module>
+    asyncio.run(main())
+  File "/opt/python3.12/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/opt/python3.12/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/python3.12/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/home/user/Doubao/chats/98132301461762/render_deploy/qq_bot.py", line 288, in main
+    await site.start()
+  File "/opt/python3.12/lib/python3.12/site-packages/aiohttp/web_runner.py", line 121, in start
+    self._server = await loop.create_server(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/python3.12/lib/python3.12/asyncio/base_events.py", line 1584, in create_server
+    raise OSError(err.errno, msg) from None
+OSError: [Errno 98] error while attempting to bind on address ('0.0.0.0', 10000): [errno 98] address already in use
