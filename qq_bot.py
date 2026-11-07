@@ -2,27 +2,33 @@
 """QQ 机器人 WebSocket 连接脚本 - GitHub Actions版"""
 
 import asyncio
+import fcntl
 import io
 import json
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime
+
 import aiohttp
 import websockets
 from aiohttp import web
 
 # ===== 你的凭证 =====
-APP_ID = "1905926627"
-APP_SECRET = "YEubI0iRAuePAwjWK8xmcSJA2ungaUPL"
+APP_ID = os.getenv("APP_ID", "")
+APP_SECRET = os.getenv("APP_SECRET", "")
 # ====================
 
 # ===== 智谱AI =====
-GLM_API_KEY = "c4e721299b1f49cfadeb4070922b3461.aWOul2brW38uHK4B"
+GLM_API_KEY = os.getenv("GLM_API_KEY", "")
 GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 GLM_MODEL = "glm-4-flash"
 # ========================
+
+if not APP_ID or not APP_SECRET or not GLM_API_KEY:
+    raise RuntimeError("缺少 APP_ID / APP_SECRET / GLM_API_KEY，请在环境变量中配置")
 
 BASE_URL = "https://api.sgroup.qq.com"
 PORT = int(os.environ.get("PORT", 10000))
@@ -63,8 +69,21 @@ def save_memory(memories):
 memory_db = load_memory()
 
 
+def acquire_single_instance_lock():
+    """确保同一时间只有一个 bot 实例在运行。"""
+    lock_path = "/tmp/dafeiyu-bot.lock"
+    lock_fd = open(lock_path, "w", encoding="utf-8")
+    try:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lock_fd
+    except BlockingIOError:
+        log.warning("另一个 bot 实例已在运行，当前进程将退出。")
+        lock_fd.close()
+        raise SystemExit(0)
+
+
 async def extract_memory(session_key, user_msg, ai_reply):
-    prompt = f"""从下面的对话中提取1条关于用户的关键信息（比如喜好、事情、约定、个人情况等），用一句话概括。如果没有值得记住的新信息，就回答"无"。
+    prompt = f"""从下面的对话中提取1条关于用户的关键信息（比如喜好、事情、约定、个人情况等），用一句话概括。如果没有值得记住的新信息，就不记。只输出一句话，不要多余解释。
 
 用户说：{user_msg}
 你回复：{ai_reply}
@@ -131,7 +150,7 @@ async def skill_weather(city):
                 temp = cur["temp_C"]
                 feels = cur["FeelsLikeC"]
                 humidity = cur["humidity"]
-                return {"type": "text", "content": f"🐟 {city}现在{desc}，{temp}°C（体感{feels}°C），湿度{humidity}%。要不要鱼先吃饱饭再出门？"}
+                return {"type": "text", "content": f"🐟 {city}现在{desc}，{temp}°C（体感{feels}°C）���湿度{humidity}%。要不要鱼先吃饱饭再出门？"}
     except Exception:
         return {"type": "text", "content": "🐟 鱼查不到这个地方的天气，你换个城市名试试？"}
 
@@ -164,7 +183,7 @@ async def skill_joke():
 # ===== 技能：现在几点 =====
 async def skill_time():
     now = datetime.now()
-    weekdays = ["一","二","三","四","五","六","日"]
+    weekdays = ["一", "二", "三", "四", "五", "六", "日"]
     return {"type": "text", "content": f"🐟 现在是{now.year}年{now.month}月{now.day}日 星期{weekdays[now.weekday()]} {now.strftime('%H:%M:%S')}。别催，鱼还在干饭呢。"}
 
 
@@ -178,7 +197,6 @@ async def skill_draw(prompt):
             async with session.post(url, json=payload, headers=headers, timeout=60) as resp:
                 data = await resp.json()
                 img_url = data["data"][0]["url"]
-                # 下载图片
                 async with session.get(img_url, timeout=30) as img_resp:
                     img_bytes = await img_resp.read()
                 return {"type": "image", "content": img_bytes, "caption": f"🐟 画好了：{prompt}"}
@@ -194,7 +212,6 @@ async def skill_tts(text):
         communicate = edge_tts.Communicate(text, "zh-CN-XiaoxiaoNeural")
         mp3_path = "/tmp/tts.mp3"
         await communicate.save(mp3_path)
-        # 用ffmpeg转AMR格式（QQ语音只认AMR）
         amr_path = "/tmp/tts.amr"
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y", "-i", mp3_path, "-ar", "8000", "-ac", "1", "-b:a", "12.2k", amr_path,
@@ -254,36 +271,29 @@ async def try_skill(content):
     """如果命中技能就返回结果dict，否则返回None"""
     c = content.strip()
 
-    # 天气
     m = re.match(r'^(?:天气|查天气|weather)\s*(.+)$', c, re.I)
     if m:
         return await skill_weather(m.group(1).strip())
 
-    # 时间
     if re.match(r'^(?:几点|现在几点|时间|几号|今天几号|现在时间)$', c):
         return await skill_time()
 
-    # 笑话
     if re.match(r'^(?:讲个笑话|笑话|来个笑话|讲笑话)$', c):
         return await skill_joke()
 
-    # 数学计算
     if re.match(r'^[\d+\-*/().\s]+$', c) and any(op in c for op in '+-*/'):
         return await skill_calc(c)
 
-    # 计算指令
     m = re.match(r'^(?:计算|算一下|calc)\s*(.+)$', c, re.I)
     if m:
         r = await skill_calc(m.group(1))
         if r:
             return r
 
-    # 生图
     m = re.match(r'^(?:画|画一张|画个|画一下|draw|画个图|画一幅)\s*(.+)$', c, re.I)
     if m:
         return await skill_draw(m.group(1).strip())
 
-    # 语音
     m = re.match(r'^(?:说|读|念|语音|读一下|念一下)\s*(.+)$', c, re.I)
     if m:
         return await skill_tts(m.group(1).strip())
@@ -375,7 +385,6 @@ async def on_event(t, data):
             return
         processed_msgs.add(msg_id)
         content = data.get("content", "").strip()
-        # 语音消息用asr识别文本
         if not content and data.get("attachments"):
             for att in data["attachments"]:
                 if att.get("asr_refer_text"):
@@ -423,7 +432,6 @@ async def on_event(t, data):
             await send_group_message(group_openid, "我脑子卡了一下，再说一遍？", msg_id)
     elif t == "READY":
         log.info("🎉 大肥鱼已上线，等待消息...")
-        # 主动给所有记忆里的用户发消息
         for key in memory_db:
             if key.startswith("c2c_"):
                 openid = key[4:]
@@ -515,21 +523,26 @@ async def main():
     log.info("🐟 大肥鱼 QQ 机器人 GitHub Actions版 启动中...")
     log.info("=" * 40)
 
-    app = web.Application()
-    app.router.add_get("/", health_check)
-    app.router.add_get("/health", health_check)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    log.info("🌐 HTTP健康检查服务已启动，端口: %d", PORT)
-
-    await run_with_timer()
+    try:
+        app = web.Application()
+        app.router.add_get("/", health_check)
+        app.router.add_get("/health", health_check)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", PORT)
+        await site.start()
+        log.info("🌐 HTTP健康检查服务已启动，端口: %d", PORT)
+        await run_with_timer()
+    except OSError as e:
+        if "address already in use" in str(e).lower():
+            log.error("端口 %s 已被占用，退出避免重复实例启动", PORT)
+            raise SystemExit(0)
+        raise
 
 
 async def run_with_timer():
     """运行5小时20分钟后自动下线"""
-    BOT_LIFETIME = 320 * 60  # 320分钟
+    BOT_LIFETIME = 320 * 60
     task = asyncio.create_task(ws_loop())
     try:
         await asyncio.wait_for(asyncio.shield(task), timeout=BOT_LIFETIME)
@@ -540,4 +553,5 @@ async def run_with_timer():
 
 
 if __name__ == "__main__":
+    acquire_single_instance_lock()
     asyncio.run(run_with_timer())
